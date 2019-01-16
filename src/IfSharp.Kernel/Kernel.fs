@@ -760,3 +760,6 @@ type IfSharpKernel(connectionInformation : ConnectionInformation) =
         //Async.Start (async { doHeartbeat() } )
         Async.Start (async { doShell() } )
         Async.Start (async { doControl() } )
+
+    /// Sends an update
+    member __.SendWidgetUpdate w = sendWidget w

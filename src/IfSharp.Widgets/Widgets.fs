@@ -39,6 +39,7 @@ module Internals =
     )
 
 open Internals 
+open System.ComponentModel
 
 /// A serializer that only supports writing instances of IWidget such that the notebook
 /// can link the values together in the UI
@@ -115,6 +116,7 @@ type ButtonStyleSerializer() =
 type Widget(modelName: string, viewName: string, ?modelModule, ?modelModuleVersion, ?viewModule, ?viewModuleVersion) as this =
 
     let domClasses = ResizeArray<_>()
+    let ev = new Event<_,_>()
     let key = WidgetManager.Register(this)
 
     member val comm_id = key
@@ -134,6 +136,12 @@ type Widget(modelName: string, viewName: string, ?modelModule, ?modelModuleVersi
 
     member __.RemoveClass(className) = domClasses.Remove className
 
+    member this.SendUpdate() =
+        App.Kernel |> Option.iter (fun k -> k.SendWidgetUpdate this)
+
+    [<JsonIgnore>]
+    member __.PropertyChanged = ev.Publish
+
     interface IWidget with
 
         member __.Key = key
@@ -144,6 +152,11 @@ type Widget(modelName: string, viewName: string, ?modelModule, ?modelModuleVersi
             |> Seq.map (fun prop -> prop.GetValue this)
             |> Seq.cast<IWidget>
             |> Seq.toArray
+
+    interface INotifyPropertyChanged with
+        
+        [<CLIEvent>]
+        member __.PropertyChanged = ev.Publish
 
 /// The WidgetManager contains an in-memory dictionary of all instances of Widget that
 /// have been creates in order to keep track of UI element in the notebook
@@ -257,13 +270,20 @@ type DOMWidget(modelName, viewName, ?modelModule, ?modelModuleVersion, ?viewModu
     [<JsonConverter(typeof<WidgetSerializer>)>]
     member val style               = DescriptionStyle() with get, set
 
+type ValueWidget<'t>(modelName, viewName) =
+    inherit DOMWidget(modelName, viewName)
+    member val value : 't = Unchecked.defaultof<'t> with get,set
+    
+    member this.OnvalueChanged() =
+        stdout.WriteLine("OnvalueChanged")
+        this.SendUpdate()
+
 type Html(?value) =
     inherit DOMWidget(modelName = "HTMLModel", viewName = "HTMLView")
     member val value = defaultArg value "" with get,set
 
 type IntSlider() =
-    inherit DOMWidget(modelName = "IntSliderModel", viewName = "IntSliderView")
-    member val value             = 7            with get,set
+    inherit ValueWidget<int>(modelName = "IntSliderModel", viewName = "IntSliderView")
     member val min               = 0            with get,set
     member val max               = 10           with get,set
     member val step              = 1            with get,set
@@ -283,8 +303,7 @@ type IntSlider() =
 //    indent : {True,False}
 //        indent the control to align with other controls with a description. The style.description_width attribute controls this width for consistence with other controls.
 type Checkbox() =
-    inherit DOMWidget(modelName = "CheckboxModel", viewName = "CheckboxView")
-    member val value    = false with get,set // Bool(False, help="Bool value").tag(sync=True)
+    inherit ValueWidget<bool>(modelName = "CheckboxModel", viewName = "CheckboxView")
     member val disabled = false with get,set // Bool(False, help="Enable or disable user changes.").tag(sync=True)
     member val indent   = false with get,set // Bool(True, help="Indent the control to align with other controls with a description.").tag(sync=True)
 
@@ -300,7 +319,7 @@ type Checkbox() =
 ///     icon: str
 ///         font-awesome icon name
 type ToggleButton() =
-    inherit DOMWidget(modelName = "ToggleButtonModel", viewName = "ToggleButtonView")
+    inherit ValueWidget<bool>(modelName = "ToggleButtonModel", viewName = "ToggleButtonView")
     
     member val value        = false  with get,set
     member val tooltip      = ""     with get,set
@@ -315,7 +334,6 @@ type ToggleButton() =
 //    value: {True,False}
 //        value of the Valid widget
 type Valid() =
-    inherit DOMWidget(modelName = "ValidModel", viewName = "ValidView")
-    member val value    = false with get,set // Bool(False, help="Bool value").tag(sync=True)
+    inherit ValueWidget<bool>(modelName = "ValidModel", viewName = "ValidView")
     member val disabled = false with get,set // Bool(False, help="Enable or disable user changes.").tag(sync=True)
     member val readout  = ""    with get,set // Unicode('Invalid', help="Message displayed when the value is False").tag(sync=True)

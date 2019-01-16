@@ -14,6 +14,9 @@ type IWidget =
 type IWidgetCollection =
     abstract member GetChildren : unit -> IWidget[]
 
+type IKernel =
+    abstract member SendWidgetUpdate : IWidget -> unit
+
 type WidgetDataDTO =
     {
         buffer_paths: string[]

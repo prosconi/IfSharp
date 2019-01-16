@@ -1,8 +1,5 @@
 ﻿namespace IfSharp.Widgets
 
-open IfSharp.Kernel
-open Newtonsoft.Json
-
 type ColorPicker() =
     inherit DOMWidget(modelName = "ColorPickerModel", viewName = "ColorPickerView")
     member val value    = ""    with get,set // Color('black', help="The color value.").tag(sync=True)

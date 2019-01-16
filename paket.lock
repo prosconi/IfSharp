@@ -7,6 +7,7 @@ NUGET
       FSharp.Core (>= 4.0.1.7-alpha)
       NETStandard.Library (>= 1.6)
     FAKE (5.8.4)
+    Fody (3.3.5)
     FSharp.Compiler.Service (25.0.1)
       FSharp.Core (>= 4.1.18)
       System.Collections.Immutable (>= 1.5)
@@ -27,6 +28,8 @@ NUGET
       FSharp.Core (> 4.3)
       Mono.Cecil (>= 0.10.0-beta6)
       Newtonsoft.Json
+    PropertyChanged.Fody (2.6)
+      Fody (>= 3.3.2)
     System.Collections.Immutable (1.5)
     System.Reflection.Metadata (1.6)
       System.Collections.Immutable (>= 1.5)
@@ -45,3 +48,4 @@ NUGET
     xunit.extensibility.execution (2.1)
       xunit.extensibility.core (2.1)
     xunit.runner.console (2.1)
+    xunit.runner.visualstudio (2.4.1)
