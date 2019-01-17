@@ -329,19 +329,19 @@ type CommOpen =
     {
         comm_id: string;        // # unique Com instance ID that has been just created by frontend
         target_name: string;    // # Which type of comm instance to construct at kernel side
-        data: Dictionary<string,obj>;              // # initialization specific data
+        data: IDictionary<string,obj>;              // # initialization specific data
     }
 
 type CommMessage =
     {
         comm_id: string;    // # unique Com instance ID
-        data: Dictionary<string,obj>;          // # payload
+        data: IDictionary<string,obj>;          // # payload
     }
 
 type CommTearDown = 
     {
         comm_id: string;    // # unique Com instance ID
-        data: Dictionary<string,obj>;          // # payload
+        data: IDictionary<string,obj>;          // # payload
     }
 
 type CommInfoRequest =
@@ -552,9 +552,9 @@ type ShellMessage =
 type Header = 
     {
         msg_id: string;
+        msg_type: string;
         username: string;
         session: string;
-        msg_type: string;
     }
 
 type KernelMessage = 

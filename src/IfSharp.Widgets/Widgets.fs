@@ -117,7 +117,11 @@ type Widget(modelName: string, viewName: string, ?modelModule, ?modelModuleVersi
 
     let domClasses = ResizeArray<_>()
     let ev = new Event<_,_>()
-    let key = WidgetManager.Register(this)
+    let key = Guid.NewGuid()
+
+    /// Sends an of the specified value to the UI
+    let sendUpdate (propertyName, value) =
+        App.Kernel |> Option.iter (fun k -> k.UpdateWidgetState(this, propertyName, value))
 
     member val comm_id = key
     member val _dom_classes          = ResizeArray<_>()                                   with get, set
@@ -129,23 +133,30 @@ type Widget(modelName: string, viewName: string, ?modelModule, ?modelModuleVersi
     member val _view_module_version  = defaultArg viewModuleVersion "1.1.0"               with get, set
     member val _view_name            = viewName                                           with get, set
 
+    /// Adds a CSS class
     member __.AddClass(className) = 
         match domClasses.Contains className with
         | true -> ()
         | false -> domClasses.Add className
 
-    member __.RemoveClass(className) = domClasses.Remove className
+    /// Removes a CSS class
+    member __.RemoveClass(className) = 
+        domClasses.Remove className
 
-    member this.SendUpdate() =
-        App.Kernel |> Option.iter (fun k -> k.SendWidgetUpdate this)
+    /// When any property changes, send the update (see: PropertyChanged.Fody)
+    member __.OnPropertyChanged(propertyName: string, before: obj, after: obj) =
+        sendUpdate (propertyName, after)
 
+    [<CLIEvent>]
     [<JsonIgnore>]
     member __.PropertyChanged = ev.Publish
 
     interface IWidget with
 
+        /// The key for this widget
         member __.Key = key
 
+        /// Dynamically gets the "parents" of this widget using reflection
         member this.GetParents() =
             this.GetType()
             |> lookupSerializationProperties<WidgetSerializer>
@@ -153,27 +164,32 @@ type Widget(modelName: string, viewName: string, ?modelModule, ?modelModuleVersi
             |> Seq.cast<IWidget>
             |> Seq.toArray
 
+        /// Called by the kernel to tell this widget to open comms
+        member this.OpenWidgetComm() =
+            let name = string this.comm_id
+            App.Kernel |> Option.iter (fun kernel -> 
+                kernel.RegisterComm
+                    (
+                        name,
+                        (fun msg data -> ()),
+                        (fun msg data -> 
+                            kernel.SendStateBusy()
+                            match data.data.TryGetValue("state") with
+                            | true, state ->
+                                let json = JsonConvert.SerializeObject(state)
+                                JsonConvert.PopulateObject(json, this)
+                            | _ -> ()
+                            kernel.SendStateIdle()
+                        ),
+                        (fun data -> ())
+                    )
+            )
+
     interface INotifyPropertyChanged with
         
         [<CLIEvent>]
+        [<JsonIgnore>]
         member __.PropertyChanged = ev.Publish
-
-/// The WidgetManager contains an in-memory dictionary of all instances of Widget that
-/// have been creates in order to keep track of UI element in the notebook
-and WidgetManager() =
-    
-    /// All registered widgets
-    static member RegisteredWidgets = Dictionary<Guid, Widget>()
-    
-    /// Adds a widget to the registration (and provides the registration id back)
-    static member Register widget = 
-        let key = Guid.NewGuid()
-        WidgetManager.RegisteredWidgets.Add(key, widget)
-        key
-
-    /// Removes a widget from the registration
-    static member DeRegister key = 
-        WidgetManager.RegisteredWidgets.Remove key
 
 /// Layout specification
 /// Defines a layout that can be expressed using CSS.  Supports a subset of
@@ -263,35 +279,29 @@ type DOMWidget(modelName, viewName, ?modelModule, ?modelModuleVersion, ?viewModu
 
     member val description         = "" with get, set
     member val description_tooltip = "" with get, set
-    member val placeholder         = "" with get, set
 
     [<JsonConverter(typeof<WidgetSerializer>)>]
     member val layout              = Layout() with get, set
     [<JsonConverter(typeof<WidgetSerializer>)>]
     member val style               = DescriptionStyle() with get, set
 
-type ValueWidget<'t>(modelName, viewName) =
+type ValueWidget<'t>(modelName, viewName, ?defaultValue) =
     inherit DOMWidget(modelName, viewName)
-    member val value : 't = Unchecked.defaultof<'t> with get,set
-    
-    member this.OnvalueChanged() =
-        stdout.WriteLine("OnvalueChanged")
-        this.SendUpdate()
+    member val value : 't = defaultArg defaultValue Unchecked.defaultof<'t> with get,set
 
 type Html(?value) =
-    inherit DOMWidget(modelName = "HTMLModel", viewName = "HTMLView")
-    member val value = defaultArg value "" with get,set
+    inherit ValueWidget<string>(modelName = "HTMLModel", viewName = "HTMLView")
 
 type IntSlider() =
     inherit ValueWidget<int>(modelName = "IntSliderModel", viewName = "IntSliderView")
-    member val min               = 0            with get,set
-    member val max               = 10           with get,set
     member val step              = 1            with get,set
-    member val disabled          = false        with get,set
-    member val continuous_update = false        with get,set
     member val orientation       = "horizontal" with get,set
     member val readout           = true         with get,set
     member val readout_format    = "d"          with get,set
+    member val min               = 0            with get,set
+    member val max               = 100          with get,set
+    member val disabled          = false        with get,set
+    member val continuous_update = true         with get,set
 
 /// Displays a boolean `value` in the form of a checkbox.
 //    Parameters

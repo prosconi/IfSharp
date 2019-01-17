@@ -34,14 +34,21 @@ type WidgetDisplay =
         model_id: Guid
     }
 
+type WidgetComm =
+    | Open
+    | Update
+
 /// The set of callbacks which define comm registration at the kernel side
-type CommCallbacks = {
-    /// called upon comm creation
-    onOpen : CommOpenCallback
-    /// called to handle every received message while the come is opened
-    onMessage : CommMessageCallback
-    /// called upon comm close
-    onClose: CommCloseCallback
+type CommCallbacks = 
+    {
+        /// called upon comm creation
+        onOpen : CommOpenCallback
+        
+        /// called to handle every received message while the come is opened
+        onMessage : CommMessageCallback
+        
+        /// called upon comm close
+        onClose: CommCloseCallback
     }
 
 type IfSharpKernel(connectionInformation : ConnectionInformation) = 
@@ -167,14 +174,12 @@ type IfSharpKernel(connectionInformation : ConnectionInformation) =
         if calculated_signature <> hmac then failwith("Wrong message signature")
 
         lastMessage <- Some
-            {
-                Identifiers = idents |> Seq.toList;
-                HmacSignature = hmac;
-                Header = header;
-                ParentHeader = parentHeader;
-                Metadata = metadata;
-                Content = content;
-            }
+            { Identifiers = idents |> Seq.toList
+              HmacSignature = hmac
+              Header = header
+              ParentHeader = parentHeader
+              Metadata = metadata
+              Content = content }
 
         lastMessage.Value
 
@@ -344,24 +349,100 @@ type IfSharpKernel(connectionInformation : ConnectionInformation) =
             
         newCode, nugetErrors
 
-    /// Sends a widget and all their parents
-    let rec sendWidget (w: IWidget) =
+    let sendCommData sourceEnvelope commId (data:Dictionary<string,obj>) =
+        let message : CommMessage = {comm_id=commId; data = data }
+        sendMessage ioSocket sourceEnvelope "comm_msg" message
+
+    let commOpen (msg : KernelMessage) (content : CommOpen) =
+        if String.IsNullOrEmpty(content.target_name) then
+            // as defined in protocol
+            let reply: CommTearDown = {comm_id = content.comm_id; data = Dictionary<string,obj>();}
+            sendMessage ioSocket msg "comm_close" reply
+        match Map.tryFind content.comm_id registeredComms with
+        |   Some callbacks ->
+            // executing open callback
+            let onOpen = callbacks.onOpen
+            let sendOnjectWithComm = sendCommData msg content.comm_id 
+            onOpen sendOnjectWithComm content
+            // saving comm_id for created instance 
+            activeComms <- Map.add content.comm_id content.target_name activeComms
+            logMessage (sprintf "comm opened id=%s target_name=%s" content.comm_id content.target_name)
+        |   None ->            
+            logMessage (sprintf "received comOpen request for the unknown com target_name \"%s\". Please register comm with this target_name first." content.target_name)
+            let reply: CommTearDown = {comm_id = content.comm_id; data = Dictionary<string,obj>();}
+            sendMessage ioSocket msg "comm_close" reply
+    
+    let commMessage (msg : KernelMessage) (content : CommMessage) =
+        match Map.tryFind content.comm_id activeComms with
+        |   Some comm_target ->
+            // finding corresponding callback
+            let callbacks = Map.find content.comm_id registeredComms
+            // and executing it
+            let onMessage = callbacks.onMessage
+            let sendOnjectWithComm = sendCommData msg content.comm_id 
+            onMessage sendOnjectWithComm content
+            logMessage (sprintf "comm message handled id=%s target_name=%s" content.comm_id comm_target)
+        |   None -> logMessage (sprintf "Got comm message (comm_id=%s), but there is nor opened comms with such comm_id. Ignoring" content.comm_id)
+
+    let commClose (msg : KernelMessage) (content : CommTearDown) =        
+        match Map.tryFind content.comm_id activeComms with
+        |   Some target_name ->
+            // executing close callback
+            let callbacks = Map.find target_name registeredComms
+            callbacks.onClose content
+            // removing comm from opened comms
+            activeComms <- Map.remove content.comm_id activeComms
+            logMessage (sprintf "comm closed id=%s target_name=%s" content.comm_id target_name)
+        |   None -> logMessage (sprintf "Got comm close request (comm_id=%s), but there is nor opened comms with such comm_id" content.comm_id)
+    
+    let commInfoRequest (msg : KernelMessage) (content : CommInfoRequest) =
+        // returning all open comms
+        let pairToDict pair =
+            let comm_id,target_name = pair
+            let dict = new Dictionary<string,string>();
+            dict.Add("target_name",target_name)
+            comm_id,dict        
+        let openedCommsDict  = Dictionary<string,Dictionary<string,string>>()
+        activeComms |> Map.toSeq |> Seq.map pairToDict |> Seq.iter (fun entry -> let key,value = entry in openedCommsDict.Add(key,value))
+        let reply = { comms = openedCommsDict}
+        sendMessage shellSocket msg "comm_info_reply" reply
+        logMessage (sprintf "Reporting %d opened comms" openedCommsDict.Count)
+
+    /// Sends a widget and all their parents / children
+    let rec sendWidgetCommOpenToClient (w: IWidget) =
+        let methodType = ""
+        let messageType = "comm_open"
         
-        for p in w.GetParents() do sendWidget p
+        for p in w.GetParents() do sendWidgetCommOpenToClient p
         
         match w |> box with
-        | :? IWidgetCollection as coll -> for p in coll.GetChildren() do sendWidget p
+        | :? IWidgetCollection as coll -> for p in coll.GetChildren() do sendWidgetCommOpenToClient p
         | _ -> ()
         
         let payload =
             { comm_id = w.Key
-              data = { buffer_paths = [||]; state = w }
+              data = { buffer_paths = [||]; state = w; method = methodType }
               target_module = null
               target_name = "jupyter.widget" }
 
         let metaData = { version = "2.0.0" }
+        sendMessageWithMetaData ioSocket lastMessage.Value messageType payload metaData
 
-        sendMessageWithMetaData ioSocket lastMessage.Value "comm_open" payload metaData
+    /// Sends an updated widget state to the client
+    let sendWidgetUpdateToClient (w: IWidget, key, value) =
+        let methodType = "update"
+        let messageType = "comm_msg"
+        let state = Dictionary<string,obj>()
+        state.Add(key, value)
+
+        let payload =
+            { comm_id = w.Key
+              data = { buffer_paths = [||]; state = state; method = methodType }
+              target_module = null
+              target_name = "jupyter.widget" }
+
+        let metaData = { version = "2.0.0" }
+        sendMessageWithMetaData ioSocket lastMessage.Value messageType payload metaData
 
     /// Sends the "value" to the frontend presented in a proper  way
     let produceOutput (value: obj) isExecutionResult =
@@ -383,7 +464,9 @@ type IfSharpKernel(connectionInformation : ConnectionInformation) =
                             "application/vnd.jupyter.widget-view+json", { version_major = 2; version_minor = 0; model_id = w.Key } |> box
                         |]
 
-                    sendWidget w
+                    w.OpenWidgetComm()
+                    commOpen lastMessage.Value { comm_id = string(w.Key); target_name = "jupyter.widget"; data = [||] |> dict}
+                    sendWidgetCommOpenToClient w
                     sendMultiDisplayData displayDatas "display_data" w.Key
                 | _ ->
                     if callbackValue.ContentType = "text/plain" then                                    
@@ -594,66 +677,6 @@ type IfSharpKernel(connectionInformation : ConnectionInformation) =
         sendMessage shellSocket msg "inspect_reply" reply
         ()
 
-    let sendCommData sourceEnvelope commId (data:Dictionary<string,obj>) =
-        let message : CommMessage = {comm_id=commId; data = data}
-        sendMessage ioSocket sourceEnvelope "comm_msg" message
-
-    let commOpen (msg : KernelMessage) (content : CommOpen) =
-        if String.IsNullOrEmpty(content.target_name) then
-            // as defined in protocol
-            let reply: CommTearDown = {comm_id = content.comm_id; data = Dictionary<string,obj>();}
-            sendMessage ioSocket msg "comm_close" reply
-        match Map.tryFind content.target_name registeredComms with
-        |   Some callbacks ->
-            // executing open callback
-            let onOpen = callbacks.onOpen
-            let sendOnjectWithComm = sendCommData msg content.comm_id 
-            onOpen sendOnjectWithComm content
-            // saving comm_id for created instance 
-            activeComms <- Map.add content.comm_id content.target_name activeComms
-            logMessage (sprintf "comm opened id=%s target_name=%s" content.comm_id content.target_name)
-        |   None ->            
-            logMessage (sprintf "received comOpen request for the unknown com target_name \"%s\". Please register comm with this target_name first." content.target_name)
-            let reply: CommTearDown = {comm_id = content.comm_id; data = Dictionary<string,obj>();}
-            sendMessage ioSocket msg "comm_close" reply
-    
-    let commMessage (msg : KernelMessage) (content : CommMessage) =
-        match Map.tryFind content.comm_id activeComms with
-        |   Some comm_target ->
-            // finding corresponding callback
-            let callbacks = Map.find comm_target registeredComms
-            // and executing it
-            let onMessage = callbacks.onMessage
-            let sendOnjectWithComm = sendCommData msg content.comm_id 
-            onMessage sendOnjectWithComm content
-            logMessage (sprintf "comm message handled id=%s target_name=%s" content.comm_id comm_target)
-        |   None -> logMessage (sprintf "Got comm message (comm_id=%s), but there is nor opened comms with such comm_id. Ignoring" content.comm_id)
-
-    let commClose (msg : KernelMessage) (content : CommTearDown) =        
-        match Map.tryFind content.comm_id activeComms with
-        |   Some target_name ->
-            // executing close callback
-            let callbacks = Map.find target_name registeredComms
-            callbacks.onClose content
-            // removing comm from opened comms
-            activeComms <- Map.remove content.comm_id activeComms
-            logMessage (sprintf "comm closed id=%s target_name=%s" content.comm_id target_name)
-        |   None -> logMessage (sprintf "Got comm close request (comm_id=%s), but there is nor opened comms with such comm_id" content.comm_id)
-    
-    let commInfoRequest (msg : KernelMessage) (content : CommInfoRequest) =
-        // returning all open comms
-        let pairToDict pair =
-            let comm_id,target_name = pair
-            let dict = new Dictionary<string,string>();
-            dict.Add("target_name",target_name)
-            comm_id,dict        
-        let openedCommsDict  = Dictionary<string,Dictionary<string,string>>()
-        activeComms |> Map.toSeq |> Seq.map pairToDict |> Seq.iter (fun entry -> let key,value = entry in openedCommsDict.Add(key,value))
-        let reply = { comms = openedCommsDict}
-        sendMessage shellSocket msg "comm_info_reply" reply
-        logMessage (sprintf "Reporting %d opened comms" openedCommsDict.Count)
-
-
     /// Loops forever receiving messages from the client and processing them
     let doShell() =
 
@@ -696,7 +719,6 @@ type IfSharpKernel(connectionInformation : ConnectionInformation) =
 
     /// Loops repeating message from the client
     let doHeartbeat() =
-
         try
             while true do
                 let hb = hbSocket.ReceiveMultipartBytes() in
@@ -705,21 +727,20 @@ type IfSharpKernel(connectionInformation : ConnectionInformation) =
         | ex -> handleException ex
     
     /// Registers a comm with specified target_name and callbacks
-    member __.RegisterComm(target_name, onOpen,onMessage,onClose) =
+    member __.RegisterComm(target_name, onOpen, onMessage, onClose) =
         if Map.containsKey target_name registeredComms then
             logMessage (sprintf "Warning! The comm with target_name \"%s\" is already registered. Overriding previous registration" target_name)
-        let callbacks :CommCallbacks = 
-            {
-                onOpen = onOpen
-                onMessage = onMessage
-                onClose = onClose
-            }
+        
+        let callbacks = 
+            { onOpen = onOpen
+              onMessage = onMessage
+              onClose = onClose }
+
         registeredComms <- Map.add target_name callbacks registeredComms
     
     /// Removes comm registration by specified comm target_name
     member __.UnregisterComm(target_name) =
         registeredComms <- Map.remove target_name registeredComms
-       
 
     /// Clears the display
     member __.ClearDisplay () =
@@ -761,5 +782,16 @@ type IfSharpKernel(connectionInformation : ConnectionInformation) =
         Async.Start (async { doShell() } )
         Async.Start (async { doControl() } )
 
-    /// Sends an update
-    member __.SendWidgetUpdate w = sendWidget w
+    /// Opens a comment for the specified widget
+    member __.OpenWidgetComm w =
+        sendWidgetCommOpenToClient w
+
+    /// Sends an update to the specified widget
+    member __.UpdateWidgetState (w, propertyName, value) = 
+        sendWidgetUpdateToClient(w, propertyName, value)
+
+    /// Sends busy state from the last message
+    member __.SendStateBusy() = sendStateBusy lastMessage.Value
+
+    /// Sends idle state from the last message
+    member __.SendStateIdle() = sendStateIdle lastMessage.Value

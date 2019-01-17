@@ -8,27 +8,26 @@ type SendExecutionResultType = string -> (string * obj) list -> string -> unit
 type SendDisplayDataType = string -> obj -> string -> string -> unit
 
 type IWidget = 
-    abstract member Key : Guid
-    abstract member GetParents : unit -> IWidget[]
+    abstract member Key            : Guid
+    abstract member GetParents     : unit -> IWidget[]
+    abstract member OpenWidgetComm : unit -> unit
 
 type IWidgetCollection =
     abstract member GetChildren : unit -> IWidget[]
 
-type IKernel =
-    abstract member SendWidgetUpdate : IWidget -> unit
-
-type WidgetDataDTO =
+type WidgetDataDTO<'T> =
     {
+        state: 'T
+        method: string
         buffer_paths: string[]
-        state: IWidget
     }
 
-type WidgetDTO =
+type WidgetDTO<'T> =
     {
+        data: WidgetDataDTO<'T>
         comm_id: Guid
-        data: WidgetDataDTO
-        target_module: string
         target_name: string
+        target_module: string
     }
 
 type IAsyncPrinter =
@@ -51,7 +50,7 @@ module Printers =
     /// Adds a custom display printer for extensibility
     let addDisplayPrinter(printer : 'T -> BinaryOutput) =
         displayPrinters <- (typeof<'T>, (fun (x:obj) -> printer (unbox x))) :: displayPrinters
-    
+  
     /// Adds a custom async display printer for extensibility
     /// Priority affects the cases where several printers are capabale of printing the save value.
     /// The printer with higher priority is selected
