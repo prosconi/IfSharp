@@ -1,117 +1,9 @@
 ﻿namespace IfSharp.Widgets
 
 open System
-open System.Collections.Generic
+open System.ComponentModel
 open IfSharp.Kernel
 open Newtonsoft.Json
-
-module Internals = 
-    
-    /// Creates a function that caches the results when called
-    let internal memoize f =
-        let cache = Dictionary<_, _>()
-        fun x ->
-            if cache.ContainsKey(x) then
-                cache.[x]
-            else
-                let res = f x
-                cache.[x] <- res
-                res
-
-    /// A memoized function that takes in a Type and looks for all properties that 
-    /// return an IWidget that is decorated by an JsonConverterAttribute that uses
-    /// the WidgetSerializer
-    let internal lookupSerializationProperties<'Serializer> = memoize (fun (t: Type) -> 
-        t.GetProperties()
-        |> Array.choose (fun prop -> 
-            let isIWidget = typeof<IWidget>.IsAssignableFrom(prop.PropertyType)
-            match isIWidget with
-            | true ->
-                match prop.GetCustomAttributes(typeof<JsonConverterAttribute>, false) with
-                | [| jc |] -> 
-                    let jc = jc :?> JsonConverterAttribute
-                    match jc.ConverterType = typeof<'Serializer> with
-                    | true -> Some prop
-                    | _ -> None
-                | _ -> None
-            | _ -> None
-        )
-    )
-
-open Internals 
-open System.ComponentModel
-
-/// A serializer that only supports writing instances of IWidget such that the notebook
-/// can link the values together in the UI
-type WidgetSerializer() =
-    inherit JsonConverter()
-
-    override __.WriteJson(writer, value, _serializer) = 
-        let isIWidget = typeof<IWidget>.IsAssignableFrom(value.GetType())
-        let isIWidgetArray = typeof<IWidget[]>.IsAssignableFrom(value.GetType())
-        if isIWidget then
-            let w = value :?> IWidget
-            writer.WriteValue(w.Key |> string |> sprintf "IPY_MODEL_%s")
-        elif isIWidgetArray then
-            let w = value :?> IWidget[]
-            writer.WriteStartArray()
-            w |> Array.iter (fun w -> writer.WriteValue(w.Key |> string |> sprintf "IPY_MODEL_%s"))
-            writer.WriteEndArray()
-        else
-            value.GetType().FullName |> failwithf "Unsupported type: %s. Expected: IWidget"
-
-    override __.ReadJson(_reader, _objectType, _existingValue, _serializer) = raise(NotSupportedException())
-    override __.CanConvert(_objectType) = false
-
-type ButtonStyle =
-    | Primary
-    | Success
-    | Info
-    | Warning
-    | Danger
-    | Custom of string
-    | NotSet
-    static member All() =
-        [|
-            Primary
-            Success
-            Info
-            Warning
-            Danger
-            NotSet
-        |]
-
-type ButtonStyleSerializer() = 
-    inherit JsonConverter()
-
-    override __.WriteJson(writer, value, _serializer) = 
-        match value with
-        | :? ButtonStyle as w -> 
-            let styleString = 
-                match w with
-                | Primary    -> "primary"
-                | Success    -> "success"
-                | Info       -> "info"
-                | Warning    -> "warning"
-                | Danger     -> "danger"
-                | NotSet     -> ""
-                | Custom str -> str
-            writer.WriteValue(styleString)
-        | _ -> 
-            value.GetType().FullName |> failwithf "Unsupported type: %s. Expected: ButtonStyle"
-
-    override __.ReadJson(_reader, _objectType, existingValue, _serializer) = 
-        match (existingValue |> string).ToLowerInvariant() with
-        | "primary" -> Primary
-        | "success" -> Success
-        | "info"    -> Info
-        | "warning" -> Warning
-        | "danger"  -> Danger
-        | ""        -> NotSet
-        | other     -> Custom other
-        |> box
-
-    override __.CanConvert(_objectType) = false
 
 type Widget(modelName: string, viewName: string, ?modelModule, ?modelModuleVersion, ?viewModule, ?viewModuleVersion) as this =
 
@@ -254,10 +146,10 @@ type Layout() =
     member val grid_area             : string = null with get, set// Unicode(None, allow_none=True, help="The grid-area CSS attribute.").tag(sync=True)
 
 /// Description style widget.
-type DescriptionStyle() =
+type DescriptionStyle(?modelName) =
     inherit Widget
         (
-            modelName = "DescriptionStyleModel",
+            modelName = (defaultArg modelName "DescriptionStyleModel"),
             viewName = "StyleView",
             modelModule = "@jupyter-widgets/controls",
             modelModuleVersion = "1.4.0"
@@ -288,62 +180,3 @@ type DOMWidget(modelName, viewName, ?modelModule, ?modelModuleVersion, ?viewModu
 type ValueWidget<'t>(modelName, viewName, ?defaultValue) =
     inherit DOMWidget(modelName, viewName)
     member val value : 't = defaultArg defaultValue Unchecked.defaultof<'t> with get,set
-
-type Html(?value) =
-    inherit ValueWidget<string>(modelName = "HTMLModel", viewName = "HTMLView")
-
-type IntSlider() =
-    inherit ValueWidget<int>(modelName = "IntSliderModel", viewName = "IntSliderView")
-    member val step              = 1            with get,set
-    member val orientation       = "horizontal" with get,set
-    member val readout           = true         with get,set
-    member val readout_format    = "d"          with get,set
-    member val min               = 0            with get,set
-    member val max               = 100          with get,set
-    member val disabled          = false        with get,set
-    member val continuous_update = true         with get,set
-
-/// Displays a boolean `value` in the form of a checkbox.
-//    Parameters
-//    ----------
-//    value : {True,False}
-//        value of the checkbox: True-checked, False-unchecked
-//    description : str
-//	    description displayed next to the checkbox
-//    indent : {True,False}
-//        indent the control to align with other controls with a description. The style.description_width attribute controls this width for consistence with other controls.
-type Checkbox() =
-    inherit ValueWidget<bool>(modelName = "CheckboxModel", viewName = "CheckboxView")
-    member val disabled = false with get,set // Bool(False, help="Enable or disable user changes.").tag(sync=True)
-    member val indent   = false with get,set // Bool(True, help="Indent the control to align with other controls with a description.").tag(sync=True)
-
-/// Displays a boolean `value` in the form of a toggle button.
-///     Parameters
-///     ----------
-///     value : {True,False}
-///         value of the toggle button: True-pressed, False-unpressed
-///     description : str
-///       description displayed next to the button
-///     tooltip: str
-///         tooltip caption of the toggle button
-///     icon: str
-///         font-awesome icon name
-type ToggleButton() =
-    inherit ValueWidget<bool>(modelName = "ToggleButtonModel", viewName = "ToggleButtonView")
-    
-    member val value        = false  with get,set
-    member val tooltip      = ""     with get,set
-    member val icon         = ""     with get,set
-    [<JsonConverter(typeof<ButtonStyleSerializer>)>]
-    member val button_style = NotSet with get,set
-
-/// Displays a boolean `value` in the form of a green check (True / valid)
-//    or a red cross (False / invalid).
-//    Parameters
-//    ----------
-//    value: {True,False}
-//        value of the Valid widget
-type Valid() =
-    inherit ValueWidget<bool>(modelName = "ValidModel", viewName = "ValidView")
-    member val disabled = false with get,set // Bool(False, help="Enable or disable user changes.").tag(sync=True)
-    member val readout  = ""    with get,set // Unicode('Invalid', help="Message displayed when the value is False").tag(sync=True)

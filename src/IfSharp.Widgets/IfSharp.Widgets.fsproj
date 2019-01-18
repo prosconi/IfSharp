@@ -77,7 +77,13 @@
   -->
   <Import Project="..\..\.paket\paket.targets" />
   <ItemGroup>
+    <Compile Include="Internals.fs" />
+    <Compile Include="Types.fs" />
+    <Compile Include="Serialization.fs" />
     <Compile Include="Widgets.fs" />
+    <Compile Include="Bool.fs" />
+    <Compile Include="Int.fs" />
+    <Compile Include="String.fs" />
     <Compile Include="Box.fs" />
     <Compile Include="Color.fs" />
     <Compile Include="Date.fs" />

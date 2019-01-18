@@ -8,9 +8,9 @@ open Newtonsoft.Json
 type Box(?modelName, ?viewName) =
     inherit DOMWidget(modelName = defaultArg modelName "BoxModel", viewName = defaultArg viewName "BoxView")
     [<JsonConverter(typeof<WidgetSerializer>)>]
-    member val children : IWidget[] = [||]   with get,set
+    member val children = [||]   with get,set
     [<JsonConverter(typeof<ButtonStyleSerializer>)>]
-    member val box_style            = NotSet with get,set
+    member val box_style            = ButtonStyle.NotSet with get,set
     interface IWidgetCollection with
         member this.GetChildren() = this.children
 

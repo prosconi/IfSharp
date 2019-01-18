@@ -1,6 +1,7 @@
 ﻿namespace IfSharp.Widgets
 
 open System.Collections.Generic
+open IfSharp.Kernel
 
 /// Base class used to display multiple child widgets.
 type SelectionContainer(modelName, viewName, ?children) as this =
